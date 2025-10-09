@@ -1,5 +1,5 @@
 import requests
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, redirect
 from bs4 import BeautifulSoup
 import urllib.parse
 
@@ -174,8 +174,13 @@ def ssvid_convert():
         if not vid or not k:
             return jsonify({"error": "Query parameters 'vid' and 'k' are required."}), 400
 
-        data = _fetch_from_ssvid_convert(vid, k)
-        return jsonify(data)
+        convert_data = _fetch_from_ssvid_convert(vid, k)
+
+        if convert_data.get('status') == 'ok' and 'dlink' in convert_data:
+            # Redirect the user directly to the final download link
+            return redirect(convert_data['dlink'], code=302)
+        else:
+            return jsonify({"error": "Failed to get download link from external API.", "details": convert_data}), 502
     except requests.exceptions.RequestException as e:
         return jsonify({"error": "External API request failed", "details": str(e)}), 502
     except Exception as e:
