@@ -82,7 +82,8 @@ def get_download_link():
     try:
         initial_response = requests.get('https://ssvid.app/en30', cookies=COMMON_COOKIES, headers=COMMON_HEADERS)
         initial_response.raise_for_status()
-        session_cookies = initial_response.cookies
+        # Merge common cookies with session cookies
+        all_cookies = {**COMMON_COOKIES, **initial_response.cookies.get_dict()}
         print("Initial GET request to ssvid.app/en30 successful.")
     except requests.exceptions.RequestException as e:
         print(f"Initial GET request to https://ssvid.app/en30 failed: {e}")
@@ -90,7 +91,7 @@ def get_download_link():
         return jsonify({"error": "Failed to initialize session with ssvid.app. The service might be down or inaccessible."}), 502
 
     # 2. Search for the video
-    search_data = _make_request('https://ssvid.app/api/ajax/search', data={'query': video_url, 'vt': 'home'}, cookies=session_cookies, headers=COMMON_HEADERS)
+    search_data = _make_request('https://ssvid.app/api/ajax/search', data={'query': video_url, 'vt': 'home'}, cookies=all_cookies, headers=COMMON_HEADERS)
     if not search_data or search_data.get('status') != 'ok':
         return jsonify({"error": "Failed to search for the video. The service might be down or the URL is invalid."}), 502
 
@@ -110,7 +111,7 @@ def get_download_link():
         }), 404
 
     # 3. Start the conversion
-    convert_data = _make_request('https://ssvid.app/api/ajax/convert', data={'vid': vid, 'k': k_value}, cookies=session_cookies, headers=COMMON_HEADERS)
+    convert_data = _make_request('https://ssvid.app/api/ajax/convert', data={'vid': vid, 'k': k_value}, cookies=all_cookies, headers=COMMON_HEADERS)
     if not convert_data:
         return jsonify({"error": "Failed to start the conversion process."}), 502
 
