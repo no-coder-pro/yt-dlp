@@ -1,4 +1,3 @@
-
 import requests
 import time
 import os
@@ -75,7 +74,9 @@ def get_download_link():
 
     proxies = None
     try:
-        with open('proxy.txt', 'r') as f:
+        script_dir = os.path.dirname(__file__)
+        proxy_file_path = os.path.join(script_dir, 'proxy.txt')
+        with open(proxy_file_path, 'r') as f:
             proxy_line = f.readline().strip()
             if proxy_line:
                 proxies = _parse_proxy_string(proxy_line)
