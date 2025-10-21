@@ -3,10 +3,16 @@
   "builds": [
     {
       "src": "app.py",
-      "use": "@vercel/python"
+      "use": "@vercel/python",
+      "config": {
+        "includeFiles": ["proxy.txt"]
+      }
     }
   ],
   "routes": [
-    { "src": "/(.*)", "dest": "app.py" }
+    {
+      "src": "/(.*)",
+      "dest": "app.py"
+    }
   ]
 }
