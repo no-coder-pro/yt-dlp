@@ -1,3 +1,4 @@
+
 import requests
 import time
 import os
@@ -72,27 +73,44 @@ def get_download_link():
     if not video_url or not quality:
         return jsonify({"error": "Missing required query parameters: 'url' and 'quality'."}), 400
 
-    proxies = None
+    all_proxies = []
     try:
         script_dir = os.path.dirname(__file__)
         proxy_file_path = os.path.join(script_dir, 'proxy.txt')
         with open(proxy_file_path, 'r') as f:
-            proxy_line = f.readline().strip()
-            if proxy_line:
-                proxies = _parse_proxy_string(proxy_line)
-                if not proxies:
-                    print("Warning: Could not parse proxy string from proxy.txt. Proceeding without proxy.")
-            else:
-                print("Warning: proxy.txt is empty. Proceeding without proxy.")
+            for line in f:
+                proxy_str = line.strip()
+                if proxy_str:
+                    parsed_proxy = _parse_proxy_string(proxy_str)
+                    if parsed_proxy:
+                        all_proxies.append(parsed_proxy)
+                    else:
+                        print(f"Warning: Could not parse proxy string: {proxy_str}")
+        if not all_proxies:
+            print("Warning: No valid proxies found in proxy.txt. Proceeding without proxy.")
     except FileNotFoundError:
         print("Warning: proxy.txt not found. Proceeding without proxy.")
     except Exception as e:
         print(f"Error reading or parsing proxy.txt: {e}. Proceeding without proxy.")
 
-    # 1. Search for the video
-    search_data = _make_request('https://ssvid.app/api/ajax/search', data={'query': video_url, 'vt': 'home'}, proxies=proxies)
-    if not search_data or search_data.get('status') != 'ok':
-        return jsonify({"error": "Failed to search for the video. The service might be down or the URL is invalid."}), 502
+    search_data = None
+    if all_proxies:
+        for i, proxy_config in enumerate(all_proxies):
+            print(f"Attempting search with proxy {i+1}/{len(all_proxies)}")
+            search_data = _make_request('https://ssvid.app/api/ajax/search', data={'query': video_url, 'vt': 'home'}, proxies=proxy_config)
+            if search_data and search_data.get('status') == 'ok':
+                print(f"Search successful with proxy {i+1}.")
+                break
+            else:
+                print(f"Search failed with proxy {i+1}. Trying next proxy...")
+        if not search_data or search_data.get('status') != 'ok':
+            return jsonify({"error": "Failed to search for the video after trying all available proxies. The service might be down or the URL is invalid."}), 502
+    else:
+        # If no proxies are configured or found, try without proxies
+        print("Attempting search without proxies.")
+        search_data = _make_request('https://ssvid.app/api/ajax/search', data={'query': video_url, 'vt': 'home'})
+        if not search_data or search_data.get('status') != 'ok':
+            return jsonify({"error": "Failed to search for the video without proxies. The service might be down or the URL is invalid."}), 502
 
     vid = search_data.get('vid')
     title = search_data.get('title')
