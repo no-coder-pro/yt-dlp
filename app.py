@@ -40,6 +40,10 @@ def _make_request(url, data, params={'hl': 'en'}, proxies=None):
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"Request to {url} failed: {e}")
+        print(f"Detailed error: {type(e).__name__} - {e}")
+        if e.response is not None:
+            print(f"Response status code: {e.response.status_code}")
+            print(f"Response text: {e.response.text}")
         return None
 
 def _find_quality_key(links, quality):
