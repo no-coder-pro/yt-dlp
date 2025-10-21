@@ -1,4 +1,3 @@
-
 import requests
 import time
 import os
@@ -9,33 +8,35 @@ app = Flask(__name__)
 # Common headers and cookies for ssvid.app API requests
 COMMON_HEADERS = {
     'accept': '*/*',
-    'accept-language': 'en-US,en;q=0.9',
+    'accept-language': 'en-US,en;q=0.9,bn;q=0.8',
     'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    'dnt': '1',
     'origin': 'https://ssvid.app',
-    'referer': 'https://ssvid.app/',
+    'priority': 'u=1, i',
+    'referer': 'https://ssvid.app/en30',
+    'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
     'x-requested-with': 'XMLHttpRequest',
 }
 
 COMMON_COOKIES = {
     '_ga': 'GA1.1.629536978.1759997878',
+    '_ga_6LBJSB3S9E': 'GS2.1.s1761029103$o7$g1$t1761030380$j3$l0$h0',
+    '_ga_4GK2EGV9LP': 'GS2.1.s1761029103$o7$g1$t1761030380$j3$l0$h0',
+    '_ga_GZNX0NRT3R': 'GS2.1.s1761029103$o7$g1$t1761030380$j3$l0$h0',
+    '_ga_KM2F3J46SD': 'GS2.1.s1761029103$o7$g1$t1761030380$j3$l0$h0',
 }
 
-def _parse_proxy_string(proxy_str):
-    """Parses a proxy string (IP:PORT:USERNAME:PASSWORD) into a dictionary."""
-    parts = proxy_str.strip().split(':')
-    if len(parts) == 4:
-        ip, port, username, password = parts
-        return {
-            "http": f"http://{username}:{password}@{ip}:{port}",
-            "https": f"https://{username}:{password}@{ip}:{port}",
-        }
-    return None
 
-def _make_request(url, data, params={'hl': 'en'}, proxies=None):
+def _make_request(url, data, params={'hl': 'en'}, cookies=None, headers=None):
     """Makes a POST request to the specified URL."""
     try:
-        response = requests.post(url, params=params, cookies=COMMON_COOKIES, headers=COMMON_HEADERS, data=data, proxies=proxies)
+        response = requests.post(url, params=params, cookies=cookies, headers=headers, data=data)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -77,44 +78,21 @@ def get_download_link():
     if not video_url or not quality:
         return jsonify({"error": "Missing required query parameters: 'url' and 'quality'."}), 400
 
-    all_proxies = []
+    # 1. Make an initial GET request to ssvid.app/en30 to get necessary cookies
     try:
-        script_dir = os.path.dirname(__file__)
-        proxy_file_path = os.path.join(script_dir, 'proxy.txt')
-        with open(proxy_file_path, 'r') as f:
-            for line in f:
-                proxy_str = line.strip()
-                if proxy_str:
-                    parsed_proxy = _parse_proxy_string(proxy_str)
-                    if parsed_proxy:
-                        all_proxies.append(parsed_proxy)
-                    else:
-                        print(f"Warning: Could not parse proxy string: {proxy_str}")
-        if not all_proxies:
-            print("Warning: No valid proxies found in proxy.txt. Proceeding without proxy.")
-    except FileNotFoundError:
-        print("Warning: proxy.txt not found. Proceeding without proxy.")
-    except Exception as e:
-        print(f"Error reading or parsing proxy.txt: {e}. Proceeding without proxy.")
+        initial_response = requests.get('https://ssvid.app/en30', cookies=COMMON_COOKIES, headers=COMMON_HEADERS)
+        initial_response.raise_for_status()
+        session_cookies = initial_response.cookies
+        print("Initial GET request to ssvid.app/en30 successful.")
+    except requests.exceptions.RequestException as e:
+        print(f"Initial GET request to https://ssvid.app/en30 failed: {e}")
+        print(f"Detailed error: {type(e).__name__} - {e}")
+        return jsonify({"error": "Failed to initialize session with ssvid.app. The service might be down or inaccessible."}), 502
 
-    search_data = None
-    if all_proxies:
-        for i, proxy_config in enumerate(all_proxies):
-            print(f"Attempting search with proxy {i+1}/{len(all_proxies)}")
-            search_data = _make_request('https://ssvid.app/api/ajax/search', data={'query': video_url, 'vt': 'home'}, proxies=proxy_config)
-            if search_data and search_data.get('status') == 'ok':
-                print(f"Search successful with proxy {i+1}.")
-                break
-            else:
-                print(f"Search failed with proxy {i+1}. Trying next proxy...")
-        if not search_data or search_data.get('status') != 'ok':
-            return jsonify({"error": "Failed to search for the video after trying all available proxies. The service might be down or the URL is invalid."}), 502
-    else:
-        # If no proxies are configured or found, try without proxies
-        print("Attempting search without proxies.")
-        search_data = _make_request('https://ssvid.app/api/ajax/search', data={'query': video_url, 'vt': 'home'})
-        if not search_data or search_data.get('status') != 'ok':
-            return jsonify({"error": "Failed to search for the video without proxies. The service might be down or the URL is invalid."}), 502
+    # 2. Search for the video
+    search_data = _make_request('https://ssvid.app/api/ajax/search', data={'query': video_url, 'vt': 'home'}, cookies=session_cookies, headers=COMMON_HEADERS)
+    if not search_data or search_data.get('status') != 'ok':
+        return jsonify({"error": "Failed to search for the video. The service might be down or the URL is invalid."}), 502
 
     vid = search_data.get('vid')
     title = search_data.get('title')
@@ -132,7 +110,7 @@ def get_download_link():
         }), 404
 
     # 3. Start the conversion
-    convert_data = _make_request('https://ssvid.app/api/ajax/convert', data={'vid': vid, 'k': k_value})
+    convert_data = _make_request('https://ssvid.app/api/ajax/convert', data={'vid': vid, 'k': k_value}, cookies=session_cookies, headers=COMMON_HEADERS)
     if not convert_data:
         return jsonify({"error": "Failed to start the conversion process."}), 502
 
