@@ -1,132 +1,267 @@
+from flask import Flask, request, jsonify, Response, stream_with_context
 import requests
+import cloudscraper
+import re
+import base64
 import time
-import os
-from flask import Flask, jsonify, request, redirect
 
 app = Flask(__name__)
 
-# Common headers and cookies for ssvid.app API requests
-COMMON_HEADERS = {
-    'accept': '*/*',
-    'accept-language': 'en-US,en;q=0.9,bn;q=0.8',
-    'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-    'dnt': '1',
-    'origin': 'https://ssvid.app',
-    'priority': 'u=1, i',
-    'referer': 'https://ssvid.app/en30',
-    'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
-    'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
-    'sec-fetch-dest': 'empty',
-    'sec-fetch-mode': 'cors',
-    'sec-fetch-site': 'same-origin',
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
-    'x-requested-with': 'XMLHttpRequest',
+# Global cookie cache
+_cookie_cache = {
+    'cookies': {
+        '_ga': 'GA1.1.1317316867.1760597222',
+        '_ga_MF283RRQCW': 'GS2.1.s1761052232$o5$g0$t1761052232$j60$l0$h0',
+    },
+    'last_updated': time.time()
 }
 
-COMMON_COOKIES = {
-    '_ga': 'GA1.1.629536978.1759997878',
-    '_ga_6LBJSB3S9E': 'GS2.1.s1761029103$o7$g1$t1761030380$j3$l0$h0',
-    '_ga_4GK2EGV9LP': 'GS2.1.s1761029103$o7$g1$t1761030380$j3$l0$h0',
-    '_ga_GZNX0NRT3R': 'GS2.1.s1761029103$o7$g1$t1761030380$j3$l0$h0',
-    '_ga_KM2F3J46SD': 'GS2.1.s1761029103$o7$g1$t1761030380$j3$l0$h0',
-}
+def get_fresh_cookies():
+    """Auto-update cookies if they're older than 1 hour"""
+    global _cookie_cache
+    
+    current_time = time.time()
+    cache_age = current_time - _cookie_cache['last_updated']
+    
+    if cache_age > 3600:
+        try:
+            scraper = cloudscraper.create_scraper(
+                browser={
+                    'browser': 'chrome',
+                    'platform': 'windows',
+                    'desktop': True
+                }
+            )
+            
+            response = scraper.get('https://cnvmp3.com/v39')
+            
+            if scraper.cookies:
+                new_cookies = {}
+                for cookie in scraper.cookies:
+                    new_cookies[cookie.name] = cookie.value
+                
+                if new_cookies:
+                    _cookie_cache['cookies'] = new_cookies
+                    _cookie_cache['last_updated'] = current_time
+        except Exception:
+            pass
+    
+    return _cookie_cache['cookies']
 
-
-def _make_request(url, data, params={'hl': 'en'}, cookies=None, headers=None):
-    """Makes a POST request to the specified URL."""
-    try:
-        response = requests.post(url, params=params, cookies=cookies, headers=headers, data=data)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Request to {url} failed: {e}")
-        print(f"Detailed error: {type(e).__name__} - {e}")
-        if e.response is not None:
-            print(f"Response status code: {e.response.status_code}")
-            print(f"Response text: {e.response.text}")
-        return None
-
-def _find_quality_key(links, quality):
-    """Finds the 'k' value for the requested quality."""
-    for format_type in links:
-        if isinstance(links[format_type], dict):
-            for key, details in links[format_type].items():
-                if isinstance(details, dict) and details.get('q') == quality:
-                    return details.get('k')
+def extract_youtube_id(url):
+    """Extract YouTube video ID from URL"""
+    patterns = [
+        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})',
+        r'youtube\.com\/watch\?.*?v=([a-zA-Z0-9_-]{11})',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    
+    if len(url) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', url):
+        return url
+    
     return None
 
-@app.route('/')
+def get_download_link(youtube_id, quality):
+    """Get YouTube video download link from cnvmp3.com"""
+    cookies = get_fresh_cookies()
+    
+    headers = {
+        'accept': '*/*',
+        'accept-language': 'en-US,en;q=0.9,bn;q=0.8',
+        'content-type': 'application/json',
+        'dnt': '1',
+        'origin': 'https://cnvmp3.com',
+        'priority': 'u=1, i',
+        'referer': 'https://cnvmp3.com/v39',
+        'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+    }
+    
+    quality_map = {
+        '144': 0, '240': 1, '360': 2, '480': 3,
+        '720': 4, '1080': 5, '1440': 6, '2160': 7, '4k': 7,
+    }
+    
+    quality_value = quality_map.get(str(quality).lower(), 4)
+    
+    json_data = {
+        'youtube_id': youtube_id,
+        'quality': quality_value,
+        'formatValue': 1,
+    }
+    
+    response = requests.post('https://cnvmp3.com/check_database.php', 
+                           cookies=cookies, 
+                           headers=headers, 
+                           json=json_data)
+    
+    return response.json()
+
+@app.route('/download', methods=['GET'])
+def download_video():
+    """
+    API endpoint to get YouTube video download links
+    Returns both original link and proxy download link
+    """
+    try:
+        url = request.args.get('url')
+        quality = request.args.get('quality', '720')
+        
+        if not url:
+            return jsonify({
+                'status': 'error',
+                'message': 'URL parameter is required'
+            }), 400
+        
+        youtube_id = extract_youtube_id(url)
+        
+        if not youtube_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid YouTube URL or video ID'
+            }), 400
+        
+        result = get_download_link(youtube_id, quality)
+        
+        if not result:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to get download link'
+            }), 400
+        
+        if not result.get('success'):
+            return jsonify({
+                'status': 'error',
+                'message': result.get('error', 'No entry found for the provided youtube_id and quality'),
+                'details': result
+            }), 400
+        
+        data = result.get('data', {})
+        original_url = data.get('server_path') or data.get('download_url') or data.get('url')
+        title = data.get('title', '')
+        
+        if not original_url:
+            return jsonify({
+                'status': 'error',
+                'message': 'Download link not found in response',
+                'details': result
+            }), 400
+        
+        encoded_url = base64.urlsafe_b64encode(original_url.encode()).decode()
+        
+        host_url = request.host_url.rstrip('/')
+        proxy_url = f"{host_url}/get?url={encoded_url}"
+        
+        return jsonify({
+            'status': 'success',
+            'youtube_id': youtube_id,
+            'quality': quality,
+            'title': title,
+            'direct_download_link': proxy_url,
+            'original_link': original_url,
+            'note': 'Use direct_download_link - it works immediately in browser or download manager'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/get', methods=['GET'])
+def proxy_download():
+    """
+    Proxy download endpoint - Streams file with proper headers
+    """
+    try:
+        encoded_url = request.args.get('url')
+        
+        if not encoded_url:
+            return jsonify({
+                'status': 'error',
+                'message': 'URL parameter is required'
+            }), 400
+        
+        try:
+            download_url = base64.urlsafe_b64decode(encoded_url.encode()).decode()
+        except Exception:
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid URL encoding'
+            }), 400
+        
+        cookies = get_fresh_cookies()
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+            'Referer': 'https://cnvmp3.com/v39',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9,bn;q=0.8',
+            'DNT': '1',
+        }
+        
+        response = requests.get(download_url, headers=headers, cookies=cookies, stream=True)
+        
+        if response.status_code != 200:
+            return jsonify({
+                'status': 'error',
+                'message': f'Failed to download file. Status: {response.status_code}'
+            }), response.status_code
+        
+        filename = 'video.mp3'
+        content_disposition = response.headers.get('Content-Disposition', '')
+        if 'filename=' in content_disposition:
+            filename = content_disposition.split('filename=')[-1].strip('"')
+        
+        def generate():
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+        
+        return Response(
+            stream_with_context(generate()),
+            content_type=response.headers.get('Content-Type', 'application/octet-stream'),
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Cache-Control': 'no-cache'
+            }
+        )
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/', methods=['GET'])
 def index():
-    base_url = request.host_url.rstrip('/')
+    """API documentation"""
+    host_url = request.host_url.rstrip('/')
+    
     return jsonify({
-        "message": "Welcome to the YouTube Downloader API!",
-        "endpoint": "/api/ytdl",
-        "method": "GET",
-        "query_params": {
-            "url": "string (required) - The YouTube video URL.",
-            "quality": "string (required) - The desired quality (e.g., '1080p', '720p', '128kbps' for mp3)."
-        },
-        "example": f"{base_url}/api/ytdl?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ&quality=720p"
+        'name': 'YouTube Downloader API',
+        'version': '2.0',
+        'note': 'Use direct_download_link - it works immediately in browser or download manager',
+        'example_request': f'GET {host_url}/download?url=https://youtu.be/dQw4w9WgXcQ&quality=720',
+        'mp3_quality_options': ['96kbps', '128kbps', '256kbps', '320kbps'],
+        'mp4_quality_options': ['144p', '240p', '360p', '480p', '720p', '1080p', '1440p', '2160p'],
+        'endpoints': {
+            '/download': 'Get YouTube video download link',
+            '/get': 'Proxy download (auto-used by direct_download_link)'
+        }
     })
 
-@app.route('/api/ytdl', methods=['GET'])
-def get_download_link():
-    video_url = request.args.get('url')
-    quality = request.args.get('quality')
-
-    if not video_url or not quality:
-        return jsonify({"error": "Missing required query parameters: 'url' and 'quality'."}), 400
-
-    # 1. Make an initial GET request to ssvid.app/en30 to get necessary cookies
-    try:
-        initial_response = requests.get('https://ssvid.app/en30', cookies=COMMON_COOKIES, headers=COMMON_HEADERS)
-        initial_response.raise_for_status()
-        # Merge common cookies with session cookies
-        all_cookies = {**COMMON_COOKIES, **initial_response.cookies.get_dict()}
-        print("Initial GET request to ssvid.app/en30 successful.")
-    except requests.exceptions.RequestException as e:
-        print(f"Initial GET request to https://ssvid.app/en30 failed: {e}")
-        print(f"Detailed error: {type(e).__name__} - {e}")
-        return jsonify({"error": "Failed to initialize session with ssvid.app. The service might be down or inaccessible."}), 502
-
-    # 2. Search for the video
-    search_data = _make_request('https://ssvid.app/api/ajax/search', data={'query': video_url, 'vt': 'home'}, cookies=all_cookies, headers=COMMON_HEADERS)
-    if not search_data or search_data.get('status') != 'ok':
-        return jsonify({"error": "Failed to search for the video. The service might be down or the URL is invalid."}), 502
-
-    vid = search_data.get('vid')
-    title = search_data.get('title')
-    links = search_data.get('links')
-
-    if not vid or not links:
-        return jsonify({"error": "Could not extract video information from the search result."}), 500
-
-    # 2. Find the requested quality and get the 'k' key
-    k_value = _find_quality_key(links, quality)
-    if not k_value:
-        return jsonify({
-            "error": f"Quality '{quality}' not found.",
-            "available_qualities": {fmt: [q.get('q') for q_key, q in v.items() if isinstance(q, dict)] for fmt, v in links.items() if isinstance(v, dict)}
-        }), 404
-
-    # 3. Start the conversion
-    convert_data = _make_request('https://ssvid.app/api/ajax/convert', data={'vid': vid, 'k': k_value}, cookies=all_cookies, headers=COMMON_HEADERS)
-    if not convert_data:
-        return jsonify({"error": "Failed to start the conversion process."}), 502
-
-    c_status = convert_data.get('c_status')
-
-    if c_status == 'CONVERTED' and convert_data.get('dlink'):
-        download_url = convert_data['dlink']
-        print(f"Generated download link for '{title}': {download_url}")
-        return jsonify({
-            "title": title,
-            "download_url": download_url
-        })
-    else:
-        print(f"Failed to get the final download link. Details: {convert_data}")
-        return jsonify({"error": "Failed to get the final download link.", "details": convert_data}), 500
+# Vercel serverless handler
+app_handler = app
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
