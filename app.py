@@ -1,6 +1,7 @@
 
 import requests
 import time
+import os
 from flask import Flask, jsonify, request, redirect
 
 app = Flask(__name__)
@@ -20,10 +21,21 @@ COMMON_COOKIES = {
     '_ga': 'GA1.1.629536978.1759997878',
 }
 
-def _make_request(url, data, params={'hl': 'en'}):
+def _parse_proxy_string(proxy_str):
+    """Parses a proxy string (IP:PORT:USERNAME:PASSWORD) into a dictionary."""
+    parts = proxy_str.strip().split(':')
+    if len(parts) == 4:
+        ip, port, username, password = parts
+        return {
+            "http": f"http://{username}:{password}@{ip}:{port}",
+            "https": f"https://{username}:{password}@{ip}:{port}",
+        }
+    return None
+
+def _make_request(url, data, params={'hl': 'en'}, proxies=None):
     """Makes a POST request to the specified URL."""
     try:
-        response = requests.post(url, params=params, cookies=COMMON_COOKIES, headers=COMMON_HEADERS, data=data)
+        response = requests.post(url, params=params, cookies=COMMON_COOKIES, headers=COMMON_HEADERS, data=data, proxies=proxies)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
@@ -61,8 +73,23 @@ def get_download_link():
     if not video_url or not quality:
         return jsonify({"error": "Missing required query parameters: 'url' and 'quality'."}), 400
 
+    proxies = None
+    try:
+        with open('proxy.txt', 'r') as f:
+            proxy_line = f.readline().strip()
+            if proxy_line:
+                proxies = _parse_proxy_string(proxy_line)
+                if not proxies:
+                    print("Warning: Could not parse proxy string from proxy.txt. Proceeding without proxy.")
+            else:
+                print("Warning: proxy.txt is empty. Proceeding without proxy.")
+    except FileNotFoundError:
+        print("Warning: proxy.txt not found. Proceeding without proxy.")
+    except Exception as e:
+        print(f"Error reading or parsing proxy.txt: {e}. Proceeding without proxy.")
+
     # 1. Search for the video
-    search_data = _make_request('https://ssvid.app/api/ajax/search', data={'query': video_url, 'vt': 'home'})
+    search_data = _make_request('https://ssvid.app/api/ajax/search', data={'query': video_url, 'vt': 'home'}, proxies=proxies)
     if not search_data or search_data.get('status') != 'ok':
         return jsonify({"error": "Failed to search for the video. The service might be down or the URL is invalid."}), 502
 
